@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+*.spec
+
+# Virtual environment (Common names - add yours if different)
+venv/
+env/
+.venv/
+.env/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# IDE configuration files (Examples - add yours)
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# User-specific configuration/data (IMPORTANT!)
+# You might want to provide *example* files instead.
+player_presets.json
+config.json
+*.wav # If you save recordings/exports in the project dir
+
+# Secrets (if you ever add any)
+# .env
+# secrets.json

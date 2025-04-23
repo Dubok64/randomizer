@@ -1,0 +1,6 @@
+pygame
+tkinterdnd2
+numpy
+soundfile
+sounddevice
+librosa
