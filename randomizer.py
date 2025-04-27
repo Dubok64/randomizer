@@ -16,6 +16,8 @@ import math
 import sounddevice as sd 
 import librosa 
 import shutil
+import sys
+import pathlib
 
 # --- Constants ---
 MAX_PLAYERS = 6
@@ -24,8 +26,8 @@ EVENT_CHECK_MS = 100
 MAX_HISTORY = 20
 SUPPORTED_FORMATS = ('.mp3', '.wav', '.ogg', '.flac')
 DEFAULT_SWITCH_INTERVAL_S = 7
-PRESETS_FILENAME = "player_presets.json"
-CONFIG_FILENAME = "config.json" # <<< For saving settings
+# PRESETS_FILENAME = "player_presets.json"
+# CONFIG_FILENAME = "config.json" # <<< For saving settings
 WAVEFORM_HEIGHT = 60  # Adjusted height for rows
 WAVEFORM_WIDTH = 400 # Adjusted width estimate
 PROGRESS_UPDATE_MS = 50 # How often to update progress visual
@@ -36,6 +38,7 @@ EXPORT_SAMPLE_RATE = 44100 # Target sample rate for export
 EXPORT_CHANNELS = 2       # Target channels for export (stereo)
 DEFAULT_WAVEFORM_COLOR = "#90EE90" # Light green - a default color if none is set
 DEFAULT_FADE_MS = 0
+APP_NAME = "Randomizer" # Or whatever you prefer
 
 # --- Pygame Custom Events ---
 PLAYER_END_EVENTS = [pygame.USEREVENT + 1 + i for i in range(MAX_PLAYERS)]
@@ -86,23 +89,58 @@ for i in range(MAX_PLAYERS):
         }
     })
 
+# --- NEW: Platform-Specific Data Path Functions ---
+
+def get_user_data_dir():
+    """Gets the appropriate user data directory based on the OS."""
+    home = pathlib.Path.home()
+    if sys.platform == "win32":
+        appdata = os.getenv('LOCALAPPDATA')
+        if appdata:
+            return pathlib.Path(appdata) / APP_NAME
+        else:
+             appdata = os.getenv('APPDATA')
+             if appdata:
+                 return pathlib.Path(appdata) / APP_NAME
+             else:
+                 return home / ".config" / APP_NAME
+    elif sys.platform == "darwin":
+        return home / "Library" / "Application Support" / APP_NAME
+    else:
+        return home / ".config" / APP_NAME
+
+def get_presets_path():
+    """Gets the full path to the presets file, ensuring the directory exists."""
+    data_dir = get_user_data_dir()
+    os.makedirs(data_dir, exist_ok=True) # Ensure directory exists
+    return data_dir / "player_presets.json" # Use the old filename here
+
+def get_config_path():
+    """Gets the full path to the config file, ensuring the directory exists."""
+    data_dir = get_user_data_dir()
+    os.makedirs(data_dir, exist_ok=True) # Ensure directory exists
+    return data_dir / "config.json" # Use the old filename here
+
+# --- End NEW Path Functions ---
+
 # --- Preset Handling Functions ---
 
 def load_presets():
-    """Loads presets from the JSON file, handling both old and new formats."""
-    # print("--- DEBUG: load_presets() CALLED ---") # <<< ADD THIS LINE
+    """Loads presets from the JSON file in the user data directory, handling both old and new formats."""
     global folder_presets
     loaded_presets = {} # Load into a temporary dict first
+    presets_file_path = get_presets_path() # <<< Get the correct path
+
     try:
-        if os.path.exists(PRESETS_FILENAME):
-            with open(PRESETS_FILENAME, 'r') as f:
+        if presets_file_path.exists(): # <<< Use the path variable
+            with open(presets_file_path, 'r') as f: # <<< Use the path variable
                 # --- Load the entire file content ONCE ---
                 try:
                     loaded_data = json.load(f)
                 except json.JSONDecodeError as decode_error:
                     # Handle case where the file exists but is invalid JSON
-                    print(f"Error decoding JSON from {PRESETS_FILENAME}: {decode_error}")
-                    messagebox.showerror("Preset Load Error", f"Could not parse presets file: {PRESETS_FILENAME}.\nIt might be corrupted.\nError: {decode_error}\nStarting with empty presets.")
+                    print(f"Error decoding JSON from {presets_file_path}: {decode_error}") # <<< Updated path in message
+                    messagebox.showerror("Preset Load Error", f"Could not parse presets file:\n{presets_file_path}\nIt might be corrupted.\nError: {decode_error}\nStarting with empty presets.") # <<< Updated path in message
                     folder_presets = {}
                     return # Exit the function early on decode error
 
@@ -130,28 +168,27 @@ def load_presets():
                 # --- End Processing ---
 
                 # --- Assign the processed dictionary to the global variable ---
-                folder_presets = loaded_presets # <<< CORRECT ASSIGNMENT
-                # --- REMOVED the extra json.load(f) call ---
+                folder_presets = loaded_presets
 
-                print(f"Loaded {len(folder_presets)} presets from {PRESETS_FILENAME}")
+                print(f"Loaded {len(folder_presets)} presets from {presets_file_path}") # <<< Updated path in message
         else:
             folder_presets = {}
-            print(f"Preset file '{PRESETS_FILENAME}' not found. Starting with empty presets.")
+            print(f"Preset file '{presets_file_path}' not found. Starting with empty presets.") # <<< Updated path in message
     except IOError as e: # Catch file reading errors
-        print(f"Error reading presets file {PRESETS_FILENAME}: {e}")
-        messagebox.showerror("Preset Load Error", f"Could not read presets file: {PRESETS_FILENAME}.\nError: {e}\nStarting with empty presets.")
+        print(f"Error reading presets file {presets_file_path}: {e}") # <<< Updated path in message
+        messagebox.showerror("Preset Load Error", f"Could not read presets file:\n{presets_file_path}.\nError: {e}\nStarting with empty presets.") # <<< Updated path in message
         folder_presets = {}
     except Exception as e: # Catch other unexpected errors during loading
         print(f"Unexpected error loading presets: {e}")
         messagebox.showerror("Preset Load Error", f"An unexpected error occurred while loading presets.\nError: {e}\nStarting with empty presets.")
         folder_presets = {}
 
-
 def save_presets():
-    """Saves the current presets (new format) to the JSON file."""
+    """Saves the current presets (new format) to the JSON file in the user data directory."""
     global folder_presets
+    presets_file_path = get_presets_path() # <<< Get the correct path
     try:
-        with open(PRESETS_FILENAME, 'w') as f:
+        with open(presets_file_path, 'w') as f: # <<< Use the path variable
             # Ensure all entries have path and color before saving (should be guaranteed by load/add)
             valid_presets = {}
             for name, data in folder_presets.items():
@@ -160,10 +197,14 @@ def save_presets():
                 else:
                     print(f"Warning: Skipping invalid preset data for '{name}' during save.")
             json.dump(valid_presets, f, indent=4)
-            print(f"Saved {len(valid_presets)} presets to {PRESETS_FILENAME}")
+            print(f"Saved {len(valid_presets)} presets to {presets_file_path}") # <<< Updated path in message
     except IOError as e:
         print(f"Error saving presets: {e}")
-        messagebox.showerror("Preset Save Error", f"Could not save presets to {PRESETS_FILENAME}.\nError: {e}")
+        messagebox.showerror("Preset Save Error", f"Could not save presets to {presets_file_path}.\nError: {e}") # <<< Updated path in message
+    except Exception as e: # Catch other potential errors during save
+        print(f"Unexpected error saving presets: {e}")
+        messagebox.showerror("Preset Save Error", f"An unexpected error occurred while saving presets.\nError: {e}")
+
 
 def update_preset_dropdowns():
     """Updates the values in all player preset dropdowns."""
@@ -530,34 +571,44 @@ global_loop_button = None # <<< ADDED: To hold reference to the global loop butt
 # --- Config Handling Functions ---
 
 def load_config():
-    """Loads configuration like the selected recording device."""
+    """Loads configuration like the selected recording device from the user data directory."""
     global selected_recording_device
+    config_file_path = get_config_path() # <<< Get the correct path
     try:
-        if os.path.exists(CONFIG_FILENAME):
-            with open(CONFIG_FILENAME, 'r') as f:
+        if config_file_path.exists(): # <<< Use the path variable
+            with open(config_file_path, 'r') as f: # <<< Use the path variable
                 config_data = json.load(f)
                 selected_recording_device = config_data.get("recording_device_name") # Get saved name
-                print(f"Loaded config. Recording device: '{selected_recording_device}'")
+                print(f"Loaded config from {config_file_path}. Recording device: '{selected_recording_device}'") # <<< Updated path in message
         else:
             selected_recording_device = None
-            print(f"Config file '{CONFIG_FILENAME}' not found.")
+            print(f"Config file '{config_file_path}' not found.") # <<< Updated path in message
     except (json.JSONDecodeError, IOError, KeyError) as e:
-        print(f"Error loading config: {e}")
+        print(f"Error loading config from {config_file_path}: {e}") # <<< Updated path in message
+        selected_recording_device = None
+    except Exception as e: # Catch other potential errors
+        print(f"Unexpected error loading config from {config_file_path}: {e}") # <<< Updated path in message
         selected_recording_device = None
 
+
 def save_config():
-    """Saves configuration."""
+    """Saves configuration to the user data directory."""
     global selected_recording_device
+    config_file_path = get_config_path() # <<< Get the correct path
     config_data = {
         "recording_device_name": selected_recording_device
     }
     try:
-        with open(CONFIG_FILENAME, 'w') as f:
+        with open(config_file_path, 'w') as f: # <<< Use the path variable
             json.dump(config_data, f, indent=4)
-            print(f"Saved config to {CONFIG_FILENAME}")
+            print(f"Saved config to {config_file_path}") # <<< Updated path in message
     except IOError as e:
-        print(f"Error saving config: {e}")
-        messagebox.showerror("Config Save Error", f"Could not save configuration.\nError: {e}")
+        print(f"Error saving config to {config_file_path}: {e}") # <<< Updated path in message
+        messagebox.showerror("Config Save Error", f"Could not save configuration to\n{config_file_path}.\nError: {e}") # <<< Updated path in message
+    except Exception as e: # Catch other potential errors
+        print(f"Unexpected error saving config to {config_file_path}: {e}") # <<< Updated path in message
+        messagebox.showerror("Config Save Error", f"An unexpected error occurred while saving configuration.\nError: {e}")
+
 
 # --- Helper Function for Fade Duration --- <<< ADDED FUNCTION
 # --- Helper Function for Fade Duration ---
@@ -1311,7 +1362,8 @@ def _play_track(player_index, track_path):
         channel.play(new_sound, **play_args)
         player_state["is_playing"] = True
         player_state["playback_start_time"] = time.monotonic()
-
+        update_channel_audio_settings(player_index)
+    
         # --- Scheduling Logic for Next Track (Only if NOT looping) ---
         if not is_currently_looping:
             if fade_ms > 0 and track_duration_ms > fade_ms:
