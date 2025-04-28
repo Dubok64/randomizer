@@ -4,7 +4,7 @@ Randomizer lets you generate dynamic soundscapes and ambient textures by simulta
 
 Key features include visual waveform display with customizable progress colors linked to presets, drag-and-drop folder loading, the ability to save/manage/rename/recolor presets, extensive global controls and hotkeys (pause, loop, next/prev group, shuffle count, clear all), and options to record the live audio output or export the current mix/stems to files.
 
-Inspired by Brian Eno's "Shuffler" application and a desire to have something similar to play with.  
+Inspired by Brian Eno's "Shuffler" application and a desire to have something similar to play with.  Should be noted that this is the product of vibe-coding with Gemini and VS Code. I'm no expert at this, and welcome any improvements or suggestions you may have!
 
 
 
