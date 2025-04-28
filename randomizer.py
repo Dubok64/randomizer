@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk
 from tkinter import filedialog, messagebox, simpledialog, colorchooser
 import pygame
+import pygame.sndarray
 import os
 import time
 import random
@@ -24,7 +25,7 @@ MAX_PLAYERS = 6
 INITIAL_VOLUME = 0.7
 EVENT_CHECK_MS = 100
 MAX_HISTORY = 20
-SUPPORTED_FORMATS = ('.mp3', '.wav', '.ogg', '.flac')
+SUPPORTED_FORMATS = ('.mp3', '.wav', '.ogg', '.flac', '.aif', '.aiff')
 DEFAULT_SWITCH_INTERVAL_S = 7
 # PRESETS_FILENAME = "player_presets.json"
 # CONFIG_FILENAME = "config.json" # <<< For saving settings
@@ -1304,6 +1305,8 @@ def initiate_fadeout_and_schedule_next(player_index):
 
 
 # --- Inside _play_track function ---
+# --- Inside _play_track function ---
+# --- Inside _play_track function ---
 def _play_track(player_index, track_path):
     """Internal: Loads, plays a specific track, handles fade-in, and schedules fade-out/next."""
     player_state = players[player_index]
@@ -1313,8 +1316,7 @@ def _play_track(player_index, track_path):
 
     # --- Stop previous state ---
     print(f"Player {player_index}: Stopping previous state before playing '{os.path.basename(track_path)}'")
-    channel.stop(); channel.set_endevent() # Stop sound, clear end event
-    # Cancel Tkinter timers
+    channel.stop(); channel.set_endevent()
     if player_state["playback_timer_id"]:
         try: root.after_cancel(player_state["playback_timer_id"])
         except tk.TclError: pass
@@ -1326,109 +1328,201 @@ def _play_track(player_index, track_path):
         player_state["progress_update_timer_id"] = None
         print(f"  Cancelled previous progress_update_timer_id.")
     player_state["is_paused"] = False; player_state["total_paused_duration"] = 0.0
+    clear_waveform(player_index)
     # --- End stop previous state ---
 
     print(f"Player {player_index}: Attempting to play: {track_path}")
     try:
-        # --- Load Waveform First (gets duration) ---
-        load_and_draw_waveform(player_index, track_path)
-        track_duration_s = player_state["current_track_duration_s"]
-        track_duration_ms = int(track_duration_s * 1000) if track_duration_s > 0 else 0
+        # --- Load sound using soundfile (convert to int16) and get accurate duration --- <<< MODIFIED BLOCK
+        print(f"  Player {player_index}: Loading with soundfile (dtype='int16')...")
+        try:
+            # Read as int16, ensure 2D array for sndarray
+            audio_data, samplerate = sf.read(track_path, dtype='int16', always_2d=True)
+            track_duration_s = len(audio_data) / samplerate
+            player_state["current_track_duration_s"] = track_duration_s # Store accurate duration now
+            track_duration_ms = int(track_duration_s * 1000) if track_duration_s > 0 else 0
+            print(f"  Player {player_index}: Loaded via soundfile. Rate={samplerate}Hz, Duration={track_duration_s:.2f}s, Shape={audio_data.shape}")
 
-        # Load sound
-        new_sound = pygame.mixer.Sound(track_path)
+            # Check if mixer sample rate matches (Pygame often uses 44100 or 22050)
+            mixer_freq, mixer_format, mixer_channels = pygame.mixer.get_init()
+            if samplerate != mixer_freq:
+                # This is a bigger issue - ideally, Pygame mixer should be initialized
+                # at a common rate, or resampling would be needed here (complex).
+                # For now, just warn. Playback might be speed-shifted.
+                print(f"  Player {player_index}: WARNING - Track sample rate ({samplerate}Hz) differs from mixer ({mixer_freq}Hz). Playback speed may be incorrect.")
+                # If this becomes a common problem, resampling audio_data here before make_sound
+                # using librosa.resample would be the proper fix.
+
+            # Create Pygame sound object from the NumPy array
+            print(f"  Player {player_index}: Creating sound object using pygame.sndarray.make_sound...")
+            new_sound = pygame.sndarray.make_sound(audio_data)
+            print(f"  Player {player_index}: Sound object created successfully.")
+
+        except Exception as sf_err:
+            # Handle errors during soundfile read or make_sound
+            print(f"  Player {player_index}: Error loading/converting audio with soundfile/sndarray: {sf_err}")
+            raise sf_err # Re-raise to be caught by the outer try/except
+
+        # --- End Sound Loading Block ---
+
         player_state["sound"] = new_sound
         player_state["filepath"] = track_path
         player_state["gui"]["status_label"].config(text=f"Playing: {os.path.basename(track_path)}")
 
-        # Get current settings
+        # Get current settings (fade, loop, interval)
         is_currently_looping = player_state["is_looping"]
         fade_ms = player_state.get("fade_duration_ms", 0)
-        # print(f"--- DEBUG: _play_track({player_index}) retrieved fade_ms: {fade_ms} ---")
-        user_interval_ms = get_interval_ms(player_index) # Can be None
+        user_interval_ms = get_interval_ms(player_index)
 
         print(f"Player {player_index}: Settings: loop={is_currently_looping}, fade={fade_ms}ms, interval={user_interval_ms}ms, duration={track_duration_ms}ms")
 
         # --- Play the sound with Fade-In ---
-        play_args = {} # Start with empty args
-        if is_currently_looping:
-            play_args["loops"] = -1
-        # Only add fade_ms if > 0
-        if fade_ms > 0:
-            play_args["fade_ms"] = fade_ms
-            print(f"Player {player_index}: Playing with {fade_ms}ms fade-in.")
+        play_args = {}
+        if is_currently_looping: play_args["loops"] = -1
+        if fade_ms > 0: play_args["fade_ms"] = fade_ms; print(f"Player {player_index}: Playing with {fade_ms}ms fade-in.")
 
-        # Use keyword arguments for play()
-        channel.play(new_sound, **play_args)
+        channel.play(new_sound, **play_args) # <<< PLAY AUDIO NOW
         player_state["is_playing"] = True
         player_state["playback_start_time"] = time.monotonic()
-        update_channel_audio_settings(player_index)
-    
-        # --- Scheduling Logic for Next Track (Only if NOT looping) ---
-        if not is_currently_looping:
-            if fade_ms > 0 and track_duration_ms > fade_ms:
-                # --- Fade Enabled: Use Timer to trigger fade-out ---
-                natural_end_fade_start_time_ms = max(1, track_duration_ms - fade_ms)
+        update_channel_audio_settings(player_index) # Apply volume/pan immediately
 
-                # Determine when to trigger the fade-out process
+        # --- Schedule Waveform Generation AFTER starting playback ---
+        # (Waveform function still reads the file itself to get float32 data)
+        print(f"Player {player_index}: Scheduling waveform load/draw.")
+        root.after(10, lambda p_idx=player_index, t_path=track_path: load_and_draw_waveform_async(p_idx, t_path))
+
+        # --- Scheduling Logic for Next Track (Only if NOT looping) ---
+        # (This logic remains the same, using the accurate duration obtained from soundfile)
+        if not is_currently_looping:
+             if fade_ms > 0 and track_duration_ms > fade_ms:
+                natural_end_fade_start_time_ms = max(1, track_duration_ms - fade_ms)
                 fade_trigger_time_ms = natural_end_fade_start_time_ms
                 if user_interval_ms is not None and user_interval_ms < natural_end_fade_start_time_ms:
                     fade_trigger_time_ms = user_interval_ms
                     print(f"Player {player_index}: User interval ({user_interval_ms}ms) is earlier than natural fade start.")
-
                 print(f"Player {player_index}: Scheduling fade-out initiation in {fade_trigger_time_ms / 1000:.2f}s.")
                 timer_id = root.after(fade_trigger_time_ms, lambda idx=player_index: initiate_fadeout_and_schedule_next(idx))
                 player_state["playback_timer_id"] = timer_id
-                channel.set_endevent() # Ensure end event is NOT used
-
-            elif fade_ms == 0:
-                # --- No Fade: Use Original Timer/End Event Logic ---
+                channel.set_endevent()
+             elif fade_ms == 0:
                 if user_interval_ms is not None:
                     print(f"Player {player_index}: Scheduling next track (no fade) in {user_interval_ms / 1000:.2f}s.")
-                    # Schedule the function that selects the next track directly
                     timer_id = root.after(user_interval_ms, lambda idx=player_index: _play_next_after_fade(idx))
                     player_state["playback_timer_id"] = timer_id
-                    channel.set_endevent() # Ensure end event is NOT used
-                elif track_duration_ms > 0: # Only set end event if duration is known
+                    channel.set_endevent()
+                elif track_duration_ms > 0:
                     print(f"Player {player_index}: Playing full track (no fade). Setting end event.")
                     channel.set_endevent(PLAYER_END_EVENTS[player_index])
                     player_state["playback_timer_id"] = None
-                else: # No duration, no interval, no fade - play indefinitely? Or stop? Let's just clear timer.
+                else:
                      print(f"Player {player_index}: No duration, interval, or fade. Playing until stopped.")
                      player_state["playback_timer_id"] = None
-                     channel.set_endevent() # Clear end event
-
-            else: # Fade > 0 but track duration is too short for fade-out
+                     channel.set_endevent()
+             else: # Fade > 0 but duration too short
                  print(f"Player {player_index}: Track duration ({track_duration_ms}ms) too short for fade-out ({fade_ms}ms). Playing full track.")
-                 # Fallback to using end event if duration > 0
-                 if track_duration_ms > 0:
-                      channel.set_endevent(PLAYER_END_EVENTS[player_index])
-                 else:
-                      channel.set_endevent() # Clear if no duration
+                 if track_duration_ms > 0: channel.set_endevent(PLAYER_END_EVENTS[player_index])
+                 else: channel.set_endevent()
                  player_state["playback_timer_id"] = None
-
-        else: # Looping is ON
+        else: # Looping
             print(f"Player {player_index}: Looping enabled, no automatic transition scheduled.")
-            player_state["playback_timer_id"] = None # Ensure no timer
-            channel.set_endevent() # Ensure no end event
+            player_state["playback_timer_id"] = None
+            channel.set_endevent()
 
-        # --- Start Progress Visualization ---
-        if track_duration_s > 0:
-            player_state["progress_update_timer_id"] = root.after(PROGRESS_UPDATE_MS, lambda idx=player_index: update_waveform_progress(idx))
-        # --- End Start Progress ---
+        # Progress timer is started by load_and_draw_waveform_async
         print(f"Player {player_index}: Playback started successfully.")
 
-    # ... (rest of _play_track error handling) ...
-    except pygame.error as e:
-        messagebox.showerror("Playback Error", f"Player {player_index}: Could not play file:\n{os.path.basename(track_path)}\nError: {e}")
+    # --- Outer Error Handling ---
+    except pygame.error as e: # Catch Pygame errors (e.g., from channel.play)
+        messagebox.showerror("Playback Error", f"Player {player_index}: Pygame error during playback setup:\n{os.path.basename(track_path)}\nError: {e}")
         player_state["sound"] = None; player_state["filepath"] = None; player_state["is_playing"] = False
         player_state["gui"]["status_label"].config(text="Playback Error.")
-    except Exception as e:
+        clear_waveform(player_index)
+    except Exception as e: # Catch other errors (e.g., from soundfile read)
          messagebox.showerror("File Error", f"Player {player_index}: Could not process file:\n{os.path.basename(track_path)}\nError: {e}")
          player_state["sound"] = None; player_state["filepath"] = None; player_state["is_playing"] = False
          player_state["gui"]["status_label"].config(text="File Error.")
+         clear_waveform(player_index)
 
     update_button_states(player_index)
+
+
+# --- NEW Helper function to load/draw waveform asynchronously ---
+def load_and_draw_waveform_async(player_index, track_path):
+    """Loads audio data, processes, draws waveform, and starts progress updates. Called via root.after."""
+    player_state = players[player_index]
+    canvas = player_state["gui"]["waveform_canvas"]
+
+    # Check if the track currently playing is still the one we intended to draw
+    if not player_state["is_playing"] or player_state["filepath"] != track_path:
+        print(f"Player {player_index}: Skipping async waveform draw (track changed or stopped).")
+        return
+
+    if not canvas: return # No canvas
+
+    print(f"Player {player_index}: Async waveform: Starting load/process for {os.path.basename(track_path)}")
+    try:
+        # --- Perform the potentially slow operations ---
+        data, samplerate = sf.read(track_path, dtype='float32')
+        # Use the more accurate duration from sf.read now
+        accurate_duration_s = len(data) / samplerate
+        player_state["current_track_duration_s"] = accurate_duration_s # Update duration
+        print(f"Player {player_index}: Async waveform: Accurate Duration: {accurate_duration_s:.2f}s, Rate: {samplerate}Hz")
+
+        if data.ndim > 1: data = data.mean(axis=1) # Make mono
+
+        samples_per_pixel = math.ceil(len(data) / WAVEFORM_WIDTH)
+        if samples_per_pixel <= 0: samples_per_pixel = 1
+
+        num_segments = WAVEFORM_WIDTH
+        processed_data = []
+        for i in range(num_segments):
+            start = i * samples_per_pixel
+            end = min((i + 1) * samples_per_pixel, len(data))
+            if start >= end:
+                processed_data.append(processed_data[-1] if processed_data else 0)
+                continue
+            segment = data[start:end]
+            processed_data.append(np.max(np.abs(segment))) # Peak amplitude
+
+        max_amp = max(processed_data) if processed_data else 1.0
+        if max_amp == 0: max_amp = 1.0
+
+        # Store normalized data (0 to 1)
+        player_state["waveform_data"] = [amp / max_amp for amp in processed_data]
+        # --- End slow operations ---
+
+        # --- Drawing Background Waveform (on the main thread via canvas) ---
+        canvas.delete("waveform_bg") # Clear any previous "unavailable" message
+        center_y = WAVEFORM_HEIGHT / 2
+        half_height = WAVEFORM_HEIGHT / 2
+        for i, normalized_amp in enumerate(player_state["waveform_data"]):
+            x = i
+            line_height = max(1, normalized_amp * half_height)
+            y1 = center_y - line_height
+            y2 = center_y + line_height
+            canvas.create_line(x, y1, x, y2, fill="grey50", width=1, tags="waveform_bg")
+        print(f"Player {player_index}: Async waveform: Drawing complete.")
+
+        # --- Start Progress Visualization NOW that waveform data exists ---
+        if accurate_duration_s > 0:
+            # Cancel any lingering progress timer just in case
+            if player_state["progress_update_timer_id"]:
+                try: root.after_cancel(player_state["progress_update_timer_id"])
+                except tk.TclError: pass
+            player_state["progress_update_timer_id"] = root.after(PROGRESS_UPDATE_MS, lambda idx=player_index: update_waveform_progress(idx))
+            print(f"Player {player_index}: Async waveform: Started progress updates.")
+        # --- End Start Progress ---
+
+    except Exception as e:
+        print(f"Player {player_index}: Async waveform: Error processing: {e}")
+        player_state["waveform_data"] = None
+        # Don't reset duration here, keep the approximate one from get_length if possible
+        # player_state["current_track_duration_s"] = 0.0
+        if canvas:
+             canvas.delete("waveform_bg") # Clear potential partial drawing
+             canvas.create_text(WAVEFORM_WIDTH / 2, WAVEFORM_HEIGHT / 2,
+                                text="Waveform unavailable", fill="grey", tags="waveform_bg")
+
 
 def play_next_random_track(player_index):
     """Selects and plays the next random track (called by timer or end event)."""

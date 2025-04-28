@@ -156,6 +156,8 @@ The application primarily relies on Pygame for playback and should support commo
 *   `MP3`
 *   `OGG`
 *   `FLAC` (May require system libraries or specific Pygame builds)
+*   `AIF`
+*   `AIFF`
 
 *Note: Compatibility with specific formats like MP3 or FLAC might depend slightly on your operating system and the specific version of Pygame and its underlying SDL_mixer library.*
 
@@ -167,22 +169,22 @@ Once a folder is loaded, the player is ready. Playback will typically start auto
 
 Each player has a set of buttons, sliders, and an entry field to control how audio tracks are played:
 
-*   **Play/Pause/Resume Button (`▶️` / `⏸️`):**
+*   **Play/Pause/Resume Button:**
     *   Controls the playback state (Play, Pause, Resume). Handles fade-in when starting.
 
-*   **Stop Button (`⏹️`):**
+*   **Stop Button:**
     *   Stops playback completely for this player. Handles fade-out based on the Fade slider setting.
 
-*   **Previous Button (`⏮️`):**
+*   **Previous Button:**
     *   Stops the current track (handling fade-out) and plays the *previously* played track in this player's history.
 
-*   **Next Button (`⏭️`):**
+*   **Next Button:**
     *   **Immediately** stops the current track (ignoring fade-out) and plays the *next* randomly selected track from the folder.
 
 *   **Loop Button (`Loop [ON/OFF]`):**
     *   Toggles looping for the currently playing track. When OFF, automatic transitions (interval or natural end) occur.
 
-*   **Reveal Button (`👁️` or similar text):**
+*   **Reveal Button:**
     *   Opens your system's file explorer and highlights the currently playing audio file.
 
 *   **Interval Entry (`Int(s):`)**
